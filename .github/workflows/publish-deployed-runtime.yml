@@ -115,18 +115,25 @@ jobs:
           set -euo pipefail
           .github/scripts/deployed-runtime.sh "$SPEC" | tee -a "$GITHUB_OUTPUT"
 
-      # Build exactly as the deployment did: the commit's own srtool recipe and
-      # toolchain pin, the metadata-hash feature, and the fixed seed that
-      # makes the build reproducible. A fresh cargo home keeps runner config
-      # out of the build.
+      # Build exactly as the private pipeline that deployed it did: a plain
+      # checkout of the commit, the commit's own srtool recipe and toolchain
+      # pin, the metadata-hash feature, the fixed seed that makes the build
+      # reproducible, and a fresh cargo home (no runner config) at the same
+      # /build and /cargo-home paths, which are embedded in the wasm.
+      - name: Check out the commit to build
+        if: steps.target.outputs.needed == 'true'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.target.outputs.commit }}
+          path: source
+          persist-credentials: false
+
       - name: Srtool build of the commit
         if: steps.target.outputs.needed == 'true'
         env:
           SPEC: ${{ steps.target.outputs.spec }}
-          COMMIT: ${{ steps.target.outputs.commit }}
         run: |
           set -euo pipefail
-          git worktree add --detach source "$COMMIT"
           image="srtool-publish-${SPEC}"
           ( cd source && ./scripts/srtool/build-srtool-image.sh "$image" )
           ( cd source/runtime && { [ -L node-subtensor ] || ln -s . node-subtensor; } )
@@ -227,22 +234,13 @@ jobs:
             exit 0
           fi
 
-          # Compare against the nearest older v<N> tag, not whatever GitHub
-          # would pick, so backfilled releases get sensible notes.
-          prev=$(gh api --paginate "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/v" --jq '.[].ref' \
-            | sed -n 's#^refs/tags/v\([0-9][0-9]*\)$#\1#p' | awk -v s="$SPEC" '$1 < s' | sort -n | tail -n 1)
-          notes=$(gh api "repos/$GITHUB_REPOSITORY/releases/generate-notes" \
-            -f tag_name="$tag" -f target_commitish="$COMMIT" \
-            ${prev:+-f previous_tag_name="v$prev"} --jq '.body' || true)
-          printf 'Runtime %s, finalized on mainnet from block %s.\n\n%s\n' \
-            "$SPEC" "$FIRST_BLOCK" "$notes" > notes.md
           latest=false
           [ "$CURRENT_SPEC" = "$SPEC" ] && latest=true
           gh release create "$tag" \
             --repo "$GITHUB_REPOSITORY" \
             --target "$COMMIT" \
             --title "Runtime ${SPEC}" \
-            --notes-file notes.md \
+            --notes "Runtime ${SPEC}, built from ${COMMIT} and finalized on mainnet from block ${FIRST_BLOCK}." \
             --latest="$latest" \
             wasm/subtensor.wasm wasm/subtensor-digest.json wasm/deployment.json
 

@@ -46,16 +46,8 @@ head=$((head))
 current_spec=$(spec_at "$finalized")
 (( current_spec >= spec )) || { echo "mainnet runs spec $current_spec; $spec has not been enacted" >&2; exit 1; }
 
-# Widen the window backwards from the head until it starts below $spec
-# (old blocks are not needed and may be unavailable), then binary search for
-# the smallest finalized block whose runtime is at least $spec.
-hi=$head step=50000 lo=$head
-while :; do
-  lo=$(( hi > step ? hi - step : 0 ))
-  s=$(spec_at "$(hash_at "$lo")")
-  (( s < spec || lo == 0 )) && break
-  hi=$lo step=$((step * 2))
-done
+# Smallest finalized block whose runtime is at least $spec.
+lo=0 hi=$head
 while (( lo < hi )); do
   mid=$(( (lo + hi) / 2 ))
   s=$(spec_at "$(hash_at "$mid")")
